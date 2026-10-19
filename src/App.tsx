@@ -148,22 +148,28 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* Dual Canvas Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {/* 2D Highway Top-down View */}
+        {/* Vertically Stacked Canvas Views (Extended Highway Length) */}
+        <div className="flex flex-col gap-5">
+          {/* 2D Highway Corridor Top-down View (Full Width) */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between text-xs font-semibold text-slate-400 px-1">
-              <span>【視圖 1】2D 高速公路俯視動態 (微觀車流 / 尾燈煞車)</span>
-              <span className="text-[11px] text-slate-500 font-normal">綠:暢通 / 黃:微緩 / 橘紅:壅塞停滯</span>
+              <span className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                <span>【視圖 1】2D 高速公路全幅俯視動態 (微觀長路段車流 / 橫向長車身 / 煞車尾燈)</span>
+              </span>
+              <span className="text-[11px] text-slate-500 font-normal">綠: 暢通 / 黃: 微緩 / 橘紅: 壅塞 | 支援畫布滑鼠拖曳與滾輪縮放</span>
             </div>
             <HighwayCanvas road={engineRef.current.road} vehicles={engineRef.current.vehicles} />
           </div>
 
-          {/* Space-Time Diagram View */}
+          {/* Space-Time Trajectory Diagram View (Full Width) */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between text-xs font-semibold text-slate-400 px-1">
-              <span>【視圖 2】時空軌跡圖 (Space-Time Diagram)</span>
-              <span className="text-[11px] text-slate-500 font-normal">X 軸為時間，Y 軸為里程，逆流波清晰可見</span>
+              <span className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-purple-500" />
+                <span>【視圖 2】全線時空軌跡圖 (Space-Time Trajectory Diagram)</span>
+              </span>
+              <span className="text-[11px] text-slate-500 font-normal">X 軸為模擬時間 (t)，Y 軸為道路里程 (x)，逆行密集條帶斜率代表衝擊波逆流速度</span>
             </div>
             <SpaceTimeCanvas
               trajectories={trajectories}
