@@ -1,14 +1,15 @@
 import React, { useRef, useEffect } from 'react';
 import { HighwayRenderer } from '../renderers/HighwayRenderer';
-import { RoadConfig, Vehicle } from '../sim/types';
+import { RoadConfig, Vehicle, ScenarioType } from '../sim/types';
 import { Maximize2, ZoomIn, ZoomOut, MoveHorizontal, Crosshair } from 'lucide-react';
 
 interface HighwayCanvasProps {
   road: RoadConfig;
   vehicles: Vehicle[];
+  scenarioType: ScenarioType;
 }
 
-export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles }) => {
+export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles, scenarioType }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<HighwayRenderer | null>(null);
@@ -17,6 +18,7 @@ export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles }) 
   const dragStartRef = useRef({ x: 0, y: 0 });
   const startOffsetRef = useRef({ x: 0, y: 0 });
 
+  // Initialize renderer
   useEffect(() => {
     if (!canvasRef.current || !containerRef.current) return;
     const renderer = new HighwayRenderer(canvasRef.current);
@@ -33,7 +35,17 @@ export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles }) 
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [road.length, road.numLanes]);
+  }, []);
+
+  // When switching scenarios, automatically re-fit the road view to 100% full width
+  useEffect(() => {
+    if (rendererRef.current && containerRef.current) {
+      const width = containerRef.current.clientWidth;
+      const height = containerRef.current.clientHeight;
+      rendererRef.current.fitToRoad(road.length, road.numLanes, width, height);
+      rendererRef.current.render(road, vehicles);
+    }
+  }, [scenarioType, road]);
 
   // Render loop triggered when props update
   useEffect(() => {
@@ -42,8 +54,9 @@ export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles }) 
   }, [road, vehicles]);
 
   const handleZoom = (factor: number) => {
-    if (!rendererRef.current) return;
-    rendererRef.current.zoom(factor);
+    if (!rendererRef.current || !containerRef.current) return;
+    const width = containerRef.current.clientWidth;
+    rendererRef.current.zoom(factor, width);
     rendererRef.current.render(road, vehicles);
   };
 
@@ -59,7 +72,7 @@ export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles }) 
     if (!rendererRef.current || !containerRef.current) return;
     // Find slow vehicle cluster or bottleneck
     const slowCars = vehicles.filter((v) => v.v * 3.6 < 45);
-    const targetX = slowCars.length > 0 ? slowCars[0].x : 1300; // Bottleneck at 1300m
+    const targetX = slowCars.length > 0 ? slowCars[0].x : 1300; // Bottleneck around 1300m
     const width = containerRef.current.clientWidth;
     rendererRef.current.focusOnLocation(targetX, width);
     rendererRef.current.render(road, vehicles);
@@ -88,10 +101,11 @@ export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles }) 
 
   const handleWheel = (e: React.WheelEvent) => {
     // Only zoom when Ctrl or Meta (Cmd) key is pressed, allowing natural page scroll otherwise
-    if (!rendererRef.current || (!e.ctrlKey && !e.metaKey)) return;
+    if (!rendererRef.current || !containerRef.current || (!e.ctrlKey && !e.metaKey)) return;
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.15 : 0.85;
-    rendererRef.current.zoom(factor);
+    const width = containerRef.current.clientWidth;
+    rendererRef.current.zoom(factor, width);
     rendererRef.current.render(road, vehicles);
   };
 

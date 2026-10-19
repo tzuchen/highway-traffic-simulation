@@ -5,10 +5,10 @@ export class HighwayRenderer {
   private ctx: CanvasRenderingContext2D;
 
   // Viewport camera transform
-  public offsetX = 0;
+  public offsetX = 40;
   public offsetY = 0;
   public scale = 0.6; // pixels per meter
-  public minScale = 0.4; // minimum scale to keep road filling canvas
+  public minScale = 0.6; // strictly clamped to full road width
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -28,22 +28,31 @@ export class HighwayRenderer {
   public fitToRoad(roadLength: number, roadLanes: number, canvasWidth: number, canvasHeight: number): void {
     const laneHeight = 36;
     const roadTotalHeight = roadLanes * laneHeight;
-    // Base scale ensures the full 2.4km road stretches across the canvas width
-    this.minScale = Math.max(0.35, (canvasWidth - 100) / roadLength);
+    // Exactly fit the 2.4km road across canvas width with 40px margins
+    const sideMargin = 40;
+    this.minScale = Math.max(0.1, (canvasWidth - sideMargin * 2) / roadLength);
     this.scale = this.minScale;
-    this.offsetX = 50;
+    this.offsetX = sideMargin;
     this.offsetY = Math.max(25, (canvasHeight - roadTotalHeight) / 2);
   }
 
-  public zoom(factor: number): void {
-    // Zoom in or out, but NEVER shrink road below minScale (so road never shrinks into a small strip)
+  public zoom(factor: number, canvasWidth: number): void {
     const newScale = this.scale * factor;
-    this.scale = Math.max(this.minScale, Math.min(3.5, newScale));
+    // Never allow zoom-out below minScale (prevents road from shrinking smaller than canvas width)
+    if (newScale <= this.minScale * 1.02) {
+      this.scale = this.minScale;
+      this.offsetX = 40;
+    } else {
+      // Zoom centered at canvas center
+      const centerRoadX = (canvasWidth / 2 - this.offsetX) / this.scale;
+      this.scale = Math.min(3.5, newScale);
+      this.offsetX = canvasWidth / 2 - centerRoadX * this.scale;
+    }
   }
 
   public focusOnLocation(xMeters: number, canvasWidth: number): void {
-    // Zoom in to 1.8x and center on specific location (e.g. bottleneck or congestion tail)
-    this.scale = Math.max(1.6, this.minScale * 2.5);
+    // Zoom in to 2.2x and center on specific location
+    this.scale = Math.max(1.8, this.minScale * 2.8);
     this.offsetX = canvasWidth / 2 - xMeters * this.scale;
   }
 
@@ -52,7 +61,7 @@ export class HighwayRenderer {
     const width = this.canvas.width / window.devicePixelRatio;
     const height = this.canvas.height / window.devicePixelRatio;
 
-    // Background grass / terrain
+    // Background terrain
     ctx.fillStyle = '#070b14';
     ctx.fillRect(0, 0, width, height);
 
@@ -159,13 +168,12 @@ export class HighwayRenderer {
       ctx.fillText(`${x}m`, xPx - 14, roadTotalHeight + 20);
     }
 
-    // 6. Draw Vehicles with Anti-Overlap Guard
-    // Group vehicles by lane and sort by x ascending to calculate leader distance
+    // 6. Draw Vehicles with Mathematical Anti-Overlap Guarantee
+    // Group vehicles by visual lane (rounding y to nearest lane)
     const vehiclesByLane: Vehicle[][] = Array.from({ length: road.numLanes }, () => []);
     for (const v of vehicles) {
-      if (v.currentLane >= 0 && v.currentLane < road.numLanes) {
-        vehiclesByLane[v.currentLane].push(v);
-      }
+      const l = Math.max(0, Math.min(road.numLanes - 1, Math.round(v.y)));
+      vehiclesByLane[l].push(v);
     }
     for (let l = 0; l < road.numLanes; l++) {
       vehiclesByLane[l].sort((a, b) => a.x - b.x);
@@ -175,28 +183,38 @@ export class HighwayRenderer {
       const laneList = vehiclesByLane[l];
       for (let i = 0; i < laneList.length; i++) {
         const v = laneList[i];
-        const nextCar = laneList[i + 1]; // Vehicle ahead on same lane
+        const prevCar = laneList[i - 1]; // Follower behind on same lane
+        const nextCar = laneList[i + 1]; // Leader ahead on same lane
 
         const isTruck = v.type === 'truck';
         const isAcc = v.type === 'acc';
 
         // Base proportional length scaling with zoom
         let vLen = Math.max(
-          isTruck ? 16 : 8,
+          isTruck ? 14 : 7,
           Math.min(isTruck ? 54 : 26, Math.round(v.profile.length * Math.max(1.2, this.scale * 2.2)))
         );
 
-        // Strict Anti-Overlap Constraint:
-        // Ensure distance to front car's rear bumper is always at least 2px
+        // A. Anti-Overlap with Follower behind:
+        // Ego's rear bumper (vFrontX - vLen) cannot penetrate follower's front bumper
+        if (prevCar) {
+          const distToFollowerPx = (v.x - prevCar.x) * this.scale;
+          if (vLen >= distToFollowerPx - 1) {
+            vLen = Math.max(3, distToFollowerPx - 2);
+          }
+        }
+
+        // B. Anti-Overlap with Leader ahead:
+        // Ego's front bumper cannot penetrate leader's rear bumper
+        let vFrontX = v.x * this.scale;
         if (nextCar) {
-          const pixelDist = (nextCar.x - v.x) * this.scale;
-          if (pixelDist < vLen + 2) {
-            vLen = Math.max(4, pixelDist - 2);
+          const leaderRearX = (nextCar.x - nextCar.profile.length) * this.scale;
+          if (vFrontX > leaderRearX - 1) {
+            vFrontX = leaderRearX - 1;
           }
         }
 
         const vWidth = Math.max(4, Math.min(isTruck ? 13 : 10.5, Math.round(vLen * 0.44)));
-        const vFrontX = v.x * this.scale;
         const vX = vFrontX - vLen;
         const vY = v.y * laneHeight + (laneHeight - vWidth) / 2;
 
@@ -215,7 +233,7 @@ export class HighwayRenderer {
           bodyColor = '#dc2626'; // Incident red
         }
 
-        // A. Tires (only draw if vehicle is large enough)
+        // 1. Tires (draw if vehicle is reasonably sized)
         if (vLen >= 12) {
           ctx.fillStyle = '#0f172a';
           ctx.fillRect(vX + vLen - 6, vY - 1, 4, 1.5);
@@ -224,7 +242,7 @@ export class HighwayRenderer {
           ctx.fillRect(vX + 2, vY + vWidth - 0.5, 4, 1.5);
         }
 
-        // B. Vehicle Body (Horizontal rectangle)
+        // 2. Vehicle Body (Horizontal rectangle)
         ctx.fillStyle = bodyColor;
         ctx.beginPath();
         ctx.roundRect(vX, vY, vLen, vWidth, Math.min(3, vLen * 0.2));
@@ -234,7 +252,7 @@ export class HighwayRenderer {
         ctx.lineWidth = 0.8;
         ctx.stroke();
 
-        // C. Roof & Glass (Windshield)
+        // 3. Roof & Glass (Windshield)
         if (vLen >= 14) {
           ctx.fillStyle = '#0f172a';
           ctx.fillRect(vX + vLen * 0.65, vY + 1.5, Math.max(2, vLen * 0.15), vWidth - 3);
@@ -248,12 +266,12 @@ export class HighwayRenderer {
           }
         }
 
-        // D. Front Headlights (Facing Right)
+        // 4. Front Headlights (Facing Right)
         ctx.fillStyle = '#fef08a';
         ctx.fillRect(vX + vLen - 1, vY + 1, 1, 2);
         ctx.fillRect(vX + vLen - 1, vY + vWidth - 3, 1, 2);
 
-        // E. Rear Brake Lights (Facing Left)
+        // 5. Rear Brake Lights (Facing Left)
         if (v.isBraking) {
           ctx.fillStyle = '#ff1e27';
           ctx.shadowColor = '#ff1e27';

@@ -175,7 +175,11 @@ export const App: React.FC = () => {
               </span>
               <span className="text-[11px] text-slate-500 font-normal">綠: 暢通 / 黃: 微緩 / 橘紅: 壅塞 | 支援畫布滑鼠拖曳與滾輪縮放</span>
             </div>
-            <HighwayCanvas road={engineRef.current.road} vehicles={engineRef.current.vehicles} />
+            <HighwayCanvas
+              road={engineRef.current.road}
+              vehicles={engineRef.current.vehicles}
+              scenarioType={scenarioType}
+            />
           </div>
 
           {/* Space-Time Trajectory Diagram View (Full Width) */}
