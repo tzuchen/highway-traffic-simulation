@@ -27,6 +27,7 @@ export const App: React.FC = () => {
   const requestRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(performance.now());
   const accumulatorRef = useRef<number>(0);
+  const lastUIUpdateRef = useRef<number>(0);
 
   const updateSim = useCallback((now: number) => {
     const elapsedRealSec = (now - lastTimeRef.current) / 1000;
@@ -43,13 +44,16 @@ export const App: React.FC = () => {
         accumulatorRef.current -= dt;
       }
 
-      // Sync React state for dashboard
-      setSimTime(engineRef.current.time);
-      setVehicleCount(engineRef.current.vehicles.length);
-      setDiagnosis(engineRef.current.getDiagnosis());
-      setTrajectories([...engineRef.current.getTrajectories()]);
-      setDetectors(engineRef.current.getDetectorReadings());
-      setHasActiveIncident(engineRef.current.hasActiveIncident());
+      // Throttle React state updates to ~10Hz (every 100ms) to eliminate slider input lag
+      if (now - lastUIUpdateRef.current >= 100) {
+        lastUIUpdateRef.current = now;
+        setSimTime(engineRef.current.time);
+        setVehicleCount(engineRef.current.vehicles.length);
+        setDiagnosis(engineRef.current.getDiagnosis());
+        setTrajectories([...engineRef.current.getTrajectories()]);
+        setDetectors(engineRef.current.getDetectorReadings());
+        setHasActiveIncident(engineRef.current.hasActiveIncident());
+      }
     }
 
     requestRef.current = requestAnimationFrame(updateSim);
@@ -102,7 +106,7 @@ export const App: React.FC = () => {
   const currentScenarioInfo = SCENARIOS[scenarioType];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans select-none overflow-y-auto">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* 1. Top Navigation & Status */}
       <Header
         currentScenario={scenarioType}

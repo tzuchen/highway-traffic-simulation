@@ -77,7 +77,9 @@ export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles }) 
   };
 
   const handleWheel = (e: React.WheelEvent) => {
-    if (!rendererRef.current) return;
+    // Only zoom when Ctrl or Meta (Cmd) key is pressed, allowing natural page scroll otherwise
+    if (!rendererRef.current || (!e.ctrlKey && !e.metaKey)) return;
+    e.preventDefault();
     const factor = e.deltaY < 0 ? 1.12 : 0.88;
     rendererRef.current.scale = Math.max(0.15, Math.min(3.0, rendererRef.current.scale * factor));
     rendererRef.current.render(road, vehicles);
