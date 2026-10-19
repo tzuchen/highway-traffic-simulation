@@ -33,10 +33,14 @@ export class TrafficAnalytics {
         });
       }
 
-      // Evict old trajectory points
+      // Evict old trajectory points efficiently in a single operation
       const cutoff = time - this.maxHistorySeconds;
-      while (this.history.length > 0 && this.history[0].time < cutoff) {
-        this.history.shift();
+      let evictCount = 0;
+      while (evictCount < this.history.length && this.history[evictCount].time < cutoff) {
+        evictCount++;
+      }
+      if (evictCount > 0) {
+        this.history.splice(0, evictCount);
       }
     }
 
@@ -57,9 +61,7 @@ export class TrafficAnalytics {
 
     // Clean detector passages older than 60s
     const detCutoff = time - 60;
-    while (this.detectorPassages.length > 0 && this.detectorPassages[0].time < detCutoff) {
-      this.detectorPassages.shift();
-    }
+    this.detectorPassages = this.detectorPassages.filter((p) => p.time >= detCutoff);
   }
 
   public getDiagnosis(time: number, vehicles: Vehicle[], road: RoadConfig, inflowVehPerHour: number): CongestionDiagnosis {

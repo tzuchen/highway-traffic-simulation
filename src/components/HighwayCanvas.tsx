@@ -1,7 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 import { HighwayRenderer } from '../renderers/HighwayRenderer';
 import { RoadConfig, Vehicle } from '../sim/types';
-import { Maximize2, ZoomIn, ZoomOut, MoveHorizontal } from 'lucide-react';
+import { Maximize2, ZoomIn, ZoomOut, MoveHorizontal, Crosshair } from 'lucide-react';
 
 interface HighwayCanvasProps {
   road: RoadConfig;
@@ -42,8 +42,8 @@ export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles }) 
   }, [road, vehicles]);
 
   const handleZoom = (factor: number) => {
-    if (!rendererRef.current || !containerRef.current) return;
-    rendererRef.current.scale = Math.max(0.2, Math.min(3.0, rendererRef.current.scale * factor));
+    if (!rendererRef.current) return;
+    rendererRef.current.zoom(factor);
     rendererRef.current.render(road, vehicles);
   };
 
@@ -52,6 +52,16 @@ export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles }) 
     const width = containerRef.current.clientWidth;
     const height = containerRef.current.clientHeight;
     rendererRef.current.fitToRoad(road.length, road.numLanes, width, height);
+    rendererRef.current.render(road, vehicles);
+  };
+
+  const handleFocusCongestion = () => {
+    if (!rendererRef.current || !containerRef.current) return;
+    // Find slow vehicle cluster or bottleneck
+    const slowCars = vehicles.filter((v) => v.v * 3.6 < 45);
+    const targetX = slowCars.length > 0 ? slowCars[0].x : 1300; // Bottleneck at 1300m
+    const width = containerRef.current.clientWidth;
+    rendererRef.current.focusOnLocation(targetX, width);
     rendererRef.current.render(road, vehicles);
   };
 
@@ -80,8 +90,8 @@ export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles }) 
     // Only zoom when Ctrl or Meta (Cmd) key is pressed, allowing natural page scroll otherwise
     if (!rendererRef.current || (!e.ctrlKey && !e.metaKey)) return;
     e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.12 : 0.88;
-    rendererRef.current.scale = Math.max(0.15, Math.min(3.0, rendererRef.current.scale * factor));
+    const factor = e.deltaY < 0 ? 1.15 : 0.85;
+    rendererRef.current.zoom(factor);
     rendererRef.current.render(road, vehicles);
   };
 
@@ -103,23 +113,31 @@ export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles }) 
       {/* Floating Canvas Controls */}
       <div className="absolute top-3 right-3 flex items-center space-x-1 bg-slate-900/80 p-1 rounded-lg border border-slate-800 backdrop-blur-md">
         <button
-          onClick={() => handleZoom(1.2)}
-          className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all"
-          title="放大視角"
+          onClick={() => handleZoom(1.25)}
+          className="p-1.5 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all cursor-pointer"
+          title="放大視角 (拉近細節)"
         >
           <ZoomIn className="w-3.5 h-3.5" />
         </button>
         <button
           onClick={() => handleZoom(0.8)}
-          className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all"
-          title="縮小視角"
+          className="p-1.5 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all cursor-pointer"
+          title="縮小視角 (最多還原至全路段)"
         >
           <ZoomOut className="w-3.5 h-3.5" />
         </button>
         <button
+          onClick={handleFocusCongestion}
+          className="flex items-center gap-1 px-2 py-1 rounded text-xs text-amber-400 hover:bg-amber-950/60 transition-all cursor-pointer border border-amber-900/50"
+          title="鏡頭自動追蹤塞車波前 / 瓶頸段"
+        >
+          <Crosshair className="w-3.5 h-3.5 text-amber-400" />
+          <span className="text-[10px] font-medium hidden sm:inline">聚焦塞車段</span>
+        </button>
+        <button
           onClick={handleResetView}
-          className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all"
-          title="重置全路段視圖"
+          className="p-1.5 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all cursor-pointer"
+          title="重置全路段全景"
         >
           <Maximize2 className="w-3.5 h-3.5" />
         </button>
@@ -127,7 +145,7 @@ export const HighwayCanvas: React.FC<HighwayCanvasProps> = ({ road, vehicles }) 
 
       <div className="absolute bottom-2 left-3 flex items-center gap-2 text-[10px] text-slate-500 font-mono pointer-events-none">
         <MoveHorizontal className="w-3 h-3 text-slate-400" />
-        <span>雙向三車道主線走廊 (2.4 km) | 橫向長車身長方形俯視 | 可拖曳平移與滾輪縮放</span>
+        <span>雙向三車道主線走廊 (2.4 km) | 橫向真實車距防重疊 | 可拖曳平移</span>
       </div>
     </div>
   );

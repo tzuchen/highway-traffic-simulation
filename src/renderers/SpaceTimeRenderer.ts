@@ -97,8 +97,13 @@ export class SpaceTimeRenderer {
       ctx.fillText(`瓶頸縮減點 (${bottleneckX}m)`, margin.left + 10, bY - 4);
     }
 
-    // 3. Draw Vehicle Trajectories
-    // Group trajectory points by vehicleId
+    // 3. Draw Vehicle Trajectories (High-performance Batched Strokes)
+    const redLines: number[] = [];
+    const orangeLines: number[] = [];
+    const yellowLines: number[] = [];
+    const greenLines: number[] = [];
+
+    // Group trajectory points by vehicleId (points already arrived in chronological order)
     const vehicleTracks = new Map<number, TrajectoryPoint[]>();
     for (const pt of trajectories) {
       if (pt.time >= minTime && pt.time <= maxTime) {
@@ -113,8 +118,6 @@ export class SpaceTimeRenderer {
 
     for (const [, pts] of vehicleTracks) {
       if (pts.length < 2) continue;
-      // Sort by time
-      pts.sort((a, b) => a.time - b.time);
 
       for (let i = 0; i < pts.length - 1; i++) {
         const p1 = pts[i];
@@ -130,27 +133,35 @@ export class SpaceTimeRenderer {
 
         const avgSpeed = (p1.speedKmh + p2.speedKmh) / 2;
 
-        // Color by speed
         if (avgSpeed < 20) {
-          ctx.strokeStyle = '#ef4444'; // Red: Jam wave
-          ctx.lineWidth = 2.0;
+          redLines.push(x1, y1, x2, y2);
         } else if (avgSpeed < 45) {
-          ctx.strokeStyle = '#f97316'; // Orange
-          ctx.lineWidth = 1.5;
+          orangeLines.push(x1, y1, x2, y2);
         } else if (avgSpeed < 75) {
-          ctx.strokeStyle = '#eab308'; // Yellow
-          ctx.lineWidth = 1.0;
+          yellowLines.push(x1, y1, x2, y2);
         } else {
-          ctx.strokeStyle = '#10b981'; // Green: Free flow
-          ctx.lineWidth = 0.8;
+          greenLines.push(x1, y1, x2, y2);
         }
-
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
       }
     }
+
+    // Helper to draw a batch of lines in a single GPU call
+    const drawBatch = (coords: number[], color: string, lineWidth: number) => {
+      if (coords.length === 0) return;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
+      for (let i = 0; i < coords.length; i += 4) {
+        ctx.moveTo(coords[i], coords[i + 1]);
+        ctx.lineTo(coords[i + 2], coords[i + 3]);
+      }
+      ctx.stroke();
+    };
+
+    drawBatch(greenLines, '#10b981', 1.0);
+    drawBatch(yellowLines, '#eab308', 1.2);
+    drawBatch(orangeLines, '#f97316', 1.6);
+    drawBatch(redLines, '#ef4444', 2.2);
 
     // 4. Plot Border & Titles
     ctx.strokeStyle = '#475569';

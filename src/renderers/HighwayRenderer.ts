@@ -7,7 +7,8 @@ export class HighwayRenderer {
   // Viewport camera transform
   public offsetX = 0;
   public offsetY = 0;
-  public scale = 0.55; // pixels per meter
+  public scale = 0.6; // pixels per meter
+  public minScale = 0.4; // minimum scale to keep road filling canvas
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -27,10 +28,23 @@ export class HighwayRenderer {
   public fitToRoad(roadLength: number, roadLanes: number, canvasWidth: number, canvasHeight: number): void {
     const laneHeight = 36;
     const roadTotalHeight = roadLanes * laneHeight;
-    // Fit full road length horizontally across canvas with 60px margins
-    this.scale = Math.max(0.3, (canvasWidth - 120) / roadLength);
-    this.offsetX = 60;
+    // Base scale ensures the full 2.4km road stretches across the canvas width
+    this.minScale = Math.max(0.35, (canvasWidth - 100) / roadLength);
+    this.scale = this.minScale;
+    this.offsetX = 50;
     this.offsetY = Math.max(25, (canvasHeight - roadTotalHeight) / 2);
+  }
+
+  public zoom(factor: number): void {
+    // Zoom in or out, but NEVER shrink road below minScale (so road never shrinks into a small strip)
+    const newScale = this.scale * factor;
+    this.scale = Math.max(this.minScale, Math.min(3.5, newScale));
+  }
+
+  public focusOnLocation(xMeters: number, canvasWidth: number): void {
+    // Zoom in to 1.8x and center on specific location (e.g. bottleneck or congestion tail)
+    this.scale = Math.max(1.6, this.minScale * 2.5);
+    this.offsetX = canvasWidth / 2 - xMeters * this.scale;
   }
 
   public render(road: RoadConfig, vehicles: Vehicle[]): void {
@@ -145,143 +159,120 @@ export class HighwayRenderer {
       ctx.fillText(`${x}m`, xPx - 14, roadTotalHeight + 20);
     }
 
-    // 6. Draw Vehicles (Realistic Top-down Horizontal Rectangles)
+    // 6. Draw Vehicles with Anti-Overlap Guard
+    // Group vehicles by lane and sort by x ascending to calculate leader distance
+    const vehiclesByLane: Vehicle[][] = Array.from({ length: road.numLanes }, () => []);
     for (const v of vehicles) {
-      // Determine vehicle dimensions (Horizontal is unambiguously the long side)
-      const isTruck = v.type === 'truck';
-      const isAcc = v.type === 'acc';
-
-      // Width fits comfortably in 36px lane; Length is 2.4x ~ 4.5x width
-      const vWidth = isTruck ? 13 : 11;
-      const baseLen = isTruck ? 54 : 26;
-      // Slight scale adaptation if zoomed in
-      const vLen = Math.max(baseLen, Math.round(v.profile.length * Math.max(1.8, this.scale * 2.8)));
-
-      // Coordinates: front is at x * scale, extending rearwards to the left
-      const vFrontX = v.x * this.scale;
-      const vX = vFrontX - vLen;
-      const vY = v.y * laneHeight + (laneHeight - vWidth) / 2;
-
-      // Color mapping by speed
-      const speedKmh = v.v * 3.6;
-      let bodyColor = '#10b981'; // Green: Free flow > 75 km/h
-      if (speedKmh < 20) {
-        bodyColor = '#ef4444'; // Red: Severe jam
-      } else if (speedKmh < 45) {
-        bodyColor = '#f97316'; // Orange: Congested
-      } else if (speedKmh < 75) {
-        bodyColor = '#eab308'; // Yellow: Moderate
+      if (v.currentLane >= 0 && v.currentLane < road.numLanes) {
+        vehiclesByLane[v.currentLane].push(v);
       }
+    }
+    for (let l = 0; l < road.numLanes; l++) {
+      vehiclesByLane[l].sort((a, b) => a.x - b.x);
+    }
 
-      if (v.hasIncident) {
-        bodyColor = '#dc2626'; // Incident red
-      }
+    for (let l = 0; l < road.numLanes; l++) {
+      const laneList = vehiclesByLane[l];
+      for (let i = 0; i < laneList.length; i++) {
+        const v = laneList[i];
+        const nextCar = laneList[i + 1]; // Vehicle ahead on same lane
 
-      // A. Wheels / Tires (4 black notches on top/bottom edges)
-      ctx.fillStyle = '#0f172a';
-      // Front tires (right side)
-      ctx.fillRect(vX + vLen - 8, vY - 1.5, 5, 2);
-      ctx.fillRect(vX + vLen - 8, vY + vWidth - 0.5, 5, 2);
-      // Rear tires (left side)
-      ctx.fillRect(vX + 3, vY - 1.5, 5, 2);
-      ctx.fillRect(vX + 3, vY + vWidth - 0.5, 5, 2);
+        const isTruck = v.type === 'truck';
+        const isAcc = v.type === 'acc';
 
-      if (isTruck) {
-        // Extra middle tires for long truck
-        ctx.fillRect(vX + vLen * 0.45, vY - 1.5, 5, 2);
-        ctx.fillRect(vX + vLen * 0.45, vY + vWidth - 0.5, 5, 2);
-      }
+        // Base proportional length scaling with zoom
+        let vLen = Math.max(
+          isTruck ? 16 : 8,
+          Math.min(isTruck ? 54 : 26, Math.round(v.profile.length * Math.max(1.2, this.scale * 2.2)))
+        );
 
-      // B. Vehicle Body (Aerodynamic horizontal rounded rectangle)
-      ctx.fillStyle = bodyColor;
-      ctx.beginPath();
-      ctx.roundRect(vX, vY, vLen, vWidth, 3.5);
-      ctx.fill();
+        // Strict Anti-Overlap Constraint:
+        // Ensure distance to front car's rear bumper is always at least 2px
+        if (nextCar) {
+          const pixelDist = (nextCar.x - v.x) * this.scale;
+          if (pixelDist < vLen + 2) {
+            vLen = Math.max(4, pixelDist - 2);
+          }
+        }
 
-      // Subtle chassis outline
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+        const vWidth = Math.max(4, Math.min(isTruck ? 13 : 10.5, Math.round(vLen * 0.44)));
+        const vFrontX = v.x * this.scale;
+        const vX = vFrontX - vLen;
+        const vY = v.y * laneHeight + (laneHeight - vWidth) / 2;
 
-      // C. Roof Cabin & Glass
-      if (isTruck) {
-        // Truck Cabin (front 15px)
-        ctx.fillStyle = '#0f172a';
-        ctx.fillRect(vX + vLen - 13, vY + 1.5, 3.5, vWidth - 3); // Windshield
-        // Trailer separation line
-        ctx.strokeStyle = '#0f172a';
-        ctx.lineWidth = 1.5;
+        // Color mapping by speed
+        const speedKmh = v.v * 3.6;
+        let bodyColor = '#10b981'; // Green: Free flow > 75 km/h
+        if (speedKmh < 20) {
+          bodyColor = '#ef4444'; // Red: Severe jam
+        } else if (speedKmh < 45) {
+          bodyColor = '#f97316'; // Orange: Congested
+        } else if (speedKmh < 75) {
+          bodyColor = '#eab308'; // Yellow: Moderate
+        }
+
+        if (v.hasIncident) {
+          bodyColor = '#dc2626'; // Incident red
+        }
+
+        // A. Tires (only draw if vehicle is large enough)
+        if (vLen >= 12) {
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(vX + vLen - 6, vY - 1, 4, 1.5);
+          ctx.fillRect(vX + vLen - 6, vY + vWidth - 0.5, 4, 1.5);
+          ctx.fillRect(vX + 2, vY - 1, 4, 1.5);
+          ctx.fillRect(vX + 2, vY + vWidth - 0.5, 4, 1.5);
+        }
+
+        // B. Vehicle Body (Horizontal rectangle)
+        ctx.fillStyle = bodyColor;
         ctx.beginPath();
-        ctx.moveTo(vX + vLen - 16, vY);
-        ctx.lineTo(vX + vLen - 16, vY + vWidth);
+        ctx.roundRect(vX, vY, vLen, vWidth, Math.min(3, vLen * 0.2));
+        ctx.fill();
+
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+        ctx.lineWidth = 0.8;
         ctx.stroke();
 
-        // Cargo box lines
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-        ctx.lineWidth = 1;
-        for (let cx = vX + 6; cx < vX + vLen - 18; cx += 8) {
-          ctx.beginPath();
-          ctx.moveTo(cx, vY + 2);
-          ctx.lineTo(cx, vY + vWidth - 2);
-          ctx.stroke();
+        // C. Roof & Glass (Windshield)
+        if (vLen >= 14) {
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(vX + vLen * 0.65, vY + 1.5, Math.max(2, vLen * 0.15), vWidth - 3);
+          ctx.fillRect(vX + vLen * 0.2, vY + 1.5, Math.max(1.5, vLen * 0.1), vWidth - 3);
+
+          if (isAcc) {
+            ctx.fillStyle = '#06b6d4';
+            ctx.beginPath();
+            ctx.arc(vX + vLen * 0.45, vY + vWidth / 2, 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
-      } else {
-        // Passenger Car & ACC Top-down Cabin
-        // Windshield (front dark curved glass)
-        ctx.fillStyle = '#0f172a';
-        ctx.beginPath();
-        ctx.roundRect(vX + vLen * 0.62, vY + 1.5, vLen * 0.16, vWidth - 3, 1.5);
-        ctx.fill();
 
-        // Rear window (rear dark glass)
-        ctx.beginPath();
-        ctx.roundRect(vX + vLen * 0.18, vY + 1.5, vLen * 0.12, vWidth - 3, 1.5);
-        ctx.fill();
+        // D. Front Headlights (Facing Right)
+        ctx.fillStyle = '#fef08a';
+        ctx.fillRect(vX + vLen - 1, vY + 1, 1, 2);
+        ctx.fillRect(vX + vLen - 1, vY + vWidth - 3, 1, 2);
 
-        // Roof panel highlight in between
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-        ctx.fillRect(vX + vLen * 0.32, vY + 2.5, vLen * 0.28, vWidth - 5);
-
-        // Side mirrors
-        ctx.fillStyle = bodyColor;
-        ctx.fillRect(vX + vLen * 0.68, vY - 1.5, 2, 1.5);
-        ctx.fillRect(vX + vLen * 0.68, vY + vWidth, 2, 1.5);
-
-        // Special ACC Tech Dome
-        if (isAcc) {
-          ctx.fillStyle = '#06b6d4';
-          ctx.beginPath();
-          ctx.arc(vX + vLen * 0.45, vY + vWidth / 2, 2.5, 0, Math.PI * 2);
-          ctx.fill();
+        // E. Rear Brake Lights (Facing Left)
+        if (v.isBraking) {
+          ctx.fillStyle = '#ff1e27';
+          ctx.shadowColor = '#ff1e27';
+          ctx.shadowBlur = 6;
+          ctx.fillRect(vX - 1, vY + 1, 1.5, 2.5);
+          ctx.fillRect(vX - 1, vY + vWidth - 3.5, 1.5, 2.5);
+          ctx.shadowBlur = 0; // Reset
+        } else {
+          ctx.fillStyle = '#7f1d1d';
+          ctx.fillRect(vX, vY + 1, 1, 2);
+          ctx.fillRect(vX, vY + vWidth - 3, 1, 2);
         }
-      }
 
-      // D. Front Headlights (Facing Right)
-      ctx.fillStyle = '#fef08a'; // Warm white
-      ctx.fillRect(vX + vLen - 1.5, vY + 1.5, 1.5, 2);
-      ctx.fillRect(vX + vLen - 1.5, vY + vWidth - 3.5, 1.5, 2);
-
-      // E. Rear Brake Lights (Facing Left)
-      if (v.isBraking) {
-        // Glowing bright red brake lights
-        ctx.fillStyle = '#ff1e27';
-        ctx.shadowColor = '#ff1e27';
-        ctx.shadowBlur = 8;
-        ctx.fillRect(vX - 1, vY + 1, 2, 3);
-        ctx.fillRect(vX - 1, vY + vWidth - 4, 2, 3);
-        ctx.shadowBlur = 0; // Reset
-      } else {
-        // Subtle dark red taillights
-        ctx.fillStyle = '#7f1d1d';
-        ctx.fillRect(vX, vY + 1.5, 1.5, 2);
-        ctx.fillRect(vX, vY + vWidth - 3.5, 1.5, 2);
-      }
-
-      // Incident warning marker
-      if (v.hasIncident) {
-        ctx.fillStyle = '#facc15';
-        ctx.font = 'bold 12px sans-serif';
-        ctx.fillText('⚠️', vX + vLen / 2 - 6, vY - 5);
+        // Incident warning marker
+        if (v.hasIncident) {
+          ctx.fillStyle = '#facc15';
+          ctx.font = 'bold 12px sans-serif';
+          ctx.fillText('⚠️', vX + vLen / 2 - 6, vY - 5);
+        }
       }
     }
 

@@ -28,6 +28,7 @@ export const App: React.FC = () => {
   const lastTimeRef = useRef<number>(performance.now());
   const accumulatorRef = useRef<number>(0);
   const lastUIUpdateRef = useRef<number>(0);
+  const lastTrajectoryUpdateRef = useRef<number>(0);
 
   const updateSim = useCallback((now: number) => {
     const elapsedRealSec = (now - lastTimeRef.current) / 1000;
@@ -35,24 +36,35 @@ export const App: React.FC = () => {
 
     if (isRunning) {
       // Substep physics loop: clamp elapsed real time to prevent spiral of death
-      const clampedElapsed = Math.min(elapsedRealSec, 0.1);
+      const clampedElapsed = Math.min(elapsedRealSec, 0.05);
       accumulatorRef.current += clampedElapsed * speedMultiplier;
 
       const dt = 0.1; // 10Hz fixed physics step
-      while (accumulatorRef.current >= dt) {
+      let steps = 0;
+      // Cap at 3 steps per animation frame to prevent physics blocking rendering at high speed
+      while (accumulatorRef.current >= dt && steps < 3) {
         engineRef.current.step(dt);
         accumulatorRef.current -= dt;
+        steps++;
+      }
+      if (accumulatorRef.current > dt * 2) {
+        accumulatorRef.current = 0;
       }
 
-      // Throttle React state updates to ~10Hz (every 100ms) to eliminate slider input lag
+      // Throttle numeric metrics updates to 10Hz (every 100ms)
       if (now - lastUIUpdateRef.current >= 100) {
         lastUIUpdateRef.current = now;
         setSimTime(engineRef.current.time);
         setVehicleCount(engineRef.current.vehicles.length);
         setDiagnosis(engineRef.current.getDiagnosis());
-        setTrajectories([...engineRef.current.getTrajectories()]);
         setDetectors(engineRef.current.getDetectorReadings());
         setHasActiveIncident(engineRef.current.hasActiveIncident());
+      }
+
+      // Throttle heavy trajectory array copying to 4Hz (every 250ms) to eliminate GC lag at 5x speed
+      if (now - lastTrajectoryUpdateRef.current >= 250) {
+        lastTrajectoryUpdateRef.current = now;
+        setTrajectories(engineRef.current.getTrajectories());
       }
     }
 
