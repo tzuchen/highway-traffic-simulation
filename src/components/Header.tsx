@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, Car, GitMerge, AlertTriangle, ShieldCheck, Zap } from 'lucide-react';
+import { Activity, Car, GitMerge, AlertTriangle, ShieldCheck, Zap, Keyboard } from 'lucide-react';
 import { ScenarioType } from '../sim/types';
 import { SCENARIOS } from '../sim/scenarios';
 
@@ -8,14 +8,18 @@ interface HeaderProps {
   onSelectScenario: (scenario: ScenarioType) => void;
   simTime: number;
   vehicleCount: number;
+  onOpenShortcuts?: () => void;
 }
+
 
 export const Header: React.FC<HeaderProps> = ({
   currentScenario,
   onSelectScenario,
   simTime,
   vehicleCount,
+  onOpenShortcuts,
 }) => {
+
   const scenarioKeys: ScenarioType[] = ['lane_drop', 'on_ramp', 'phantom_jam', 'accident'];
 
   const getScenarioIcon = (type: ScenarioType) => {
@@ -88,7 +92,20 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="text-slate-500">模擬時長:</span>
           <span className="text-blue-400 font-bold">{formatTime(simTime)}</span>
         </div>
+
+        {onOpenShortcuts && (
+          <button
+            onClick={onOpenShortcuts}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-950/80 hover:bg-slate-800 rounded-lg border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer font-sans"
+            title="查看鍵盤快捷鍵 (快速鍵 ?)"
+          >
+            <Keyboard className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="hidden sm:inline">快捷鍵</span>
+            <kbd className="px-1 py-0.2 bg-slate-900 border border-slate-700 rounded text-[9px] text-slate-400 font-mono">?</kbd>
+          </button>
+        )}
       </div>
     </header>
   );
 };
+

@@ -1,4 +1,5 @@
-export type VehicleType = 'car' | 'truck' | 'acc';
+export type VehicleType = 'car' | 'truck' | 'acc' | 'speeder';
+export type DriverPersonality = 'aggressive' | 'normal' | 'cautious' | 'speeder';
 
 export interface DriverProfile {
   desiredSpeed: number;        // v0 (m/s)
@@ -12,24 +13,30 @@ export interface DriverProfile {
   politeness: number;          // MOBIL politeness p
   laneChangeThreshold: number; // MOBIL threshold ath (m/s^2)
   safeDecel: number;           // MOBIL safe deceleration bsafe (m/s^2)
+  personality?: DriverPersonality;
 }
 
 export interface Vehicle {
   id: number;
   type: VehicleType;
   profile: DriverProfile;
+  personality?: DriverPersonality;
   x: number;                  // Longitudinal position (meters)
   y: number;                  // Lateral position (lane unit, e.g. 0.0, 1.0)
   targetLane: number;         // Target lane index
   currentLane: number;        // Current lane index
   laneChangeProgress: number; // 0 to 1 during lane change
   laneChangeCooldown: number; // seconds remaining before allowed to change lane again
+  isAbortingLaneChange?: boolean; // True if aborted mid-maneuver and returning to currentLane
   v: number;                  // Speed (m/s)
   a: number;                  // Acceleration (m/s^2)
   isBraking: boolean;         // True if decelerating noticeably
   color: string;
   hasIncident?: boolean;      // True if vehicle is stopped (e.g. accident)
+  overtakeCount?: number;     // Number of vehicles overtaken
+  inducedBrakesCount?: number;// Number of times this vehicle forced follower to hard brake
 }
+
 
 export interface Lane {
   index: number;
@@ -87,3 +94,23 @@ export interface DetectorReading {
   densityVehPerKm: number;    // k
   speedKmh: number;           // v
 }
+
+export interface VehicleTelemetry {
+  vehicle: Vehicle;
+  leader: Vehicle | null;
+  follower: Vehicle | null;
+  actualGapMeters: number | null; // s
+  desiredGapMeters: number | null; // s*
+  speedKmh: number;
+  desiredSpeedKmh: number;
+  acceleration: number;
+  timeHeadwaySec: number;
+  relativeClosingSpeedKmh: number | null; // (v - v_lead) * 3.6
+  statusLabel: string;
+  personalityLabel: string;
+  overtakeCount?: number;
+  inducedBrakesCount?: number;
+  speedingPct?: number;       // (speedKmh - speedLimitKmh) / speedLimitKmh * 100
+}
+
+

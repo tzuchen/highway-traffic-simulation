@@ -12,8 +12,9 @@ export function calculateIDMAcceleration(
   const profile = ego.profile;
   const v = Math.max(0, ego.v);
 
-  // If external speed limit exists and is lower, obey it
-  const effectiveDesiredSpeed = speedLimitKmh
+  // If external speed limit exists and is lower, obey it (speeders intentionally disobey and speed)
+  const obeysSpeedLimit = ego.type !== 'speeder' && ego.personality !== 'speeder';
+  const effectiveDesiredSpeed = (speedLimitKmh && obeysSpeedLimit)
     ? Math.min(profile.desiredSpeed, (speedLimitKmh * 1000) / 3600)
     : profile.desiredSpeed;
 
@@ -83,3 +84,17 @@ export function updateBallistic(ego: Vehicle, accel: number, dt: number): void {
   // Visual brake light threshold
   ego.isBraking = accel < -1.5;
 }
+
+/**
+ * Calculates continuous sub-frame displacement deltaX under ballistic motion with exact zero-velocity stopping.
+ * Prevents negative retreat in slow-and-go jam queues when a < 0.
+ */
+export function getBallisticDisplacement(v: number, a: number, tau: number): number {
+  if (v <= 0 || tau <= 0) return 0;
+  if (a < 0 && v + a * tau <= 0) {
+    const absA = Math.max(0.001, Math.abs(a));
+    return (v * v) / (2 * absA);
+  }
+  return Math.max(0, v * tau + 0.5 * a * tau * tau);
+}
+

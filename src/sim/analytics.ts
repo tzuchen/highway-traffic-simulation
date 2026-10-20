@@ -183,13 +183,18 @@ export class TrafficAnalytics {
   public getDetectorReadings(): DetectorReading[] {
     const results: DetectorReading[] = [];
     const windowSec = 30; // 30-second moving average
+    const latestTime = this.detectorPassages.length > 0 ? this.detectorPassages[this.detectorPassages.length - 1].time : 0;
+    const windowCutoff = latestTime - windowSec;
 
     for (const det of this.detectorLocations) {
-      const passages = this.detectorPassages.filter((p) => Math.abs(p.x - det.x) < 5);
+      const passages = this.detectorPassages.filter(
+        (p) => Math.abs(p.x - det.x) < 5 && p.time >= windowCutoff
+      );
       const count = passages.length;
 
       // Flow q = (count / windowSec) * 3600 (veh/h)
       const flowVehPerHour = Math.round((count / windowSec) * 3600);
+
 
       let meanSpeed = 95;
       if (passages.length > 0) {

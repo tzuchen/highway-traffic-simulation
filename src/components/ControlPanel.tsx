@@ -13,6 +13,7 @@ interface ControlPanelProps {
   onTriggerPhantomBrake: () => void;
   onToggleIncident: () => void;
   hasActiveIncident: boolean;
+  onSpawnSpeeder: () => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -26,6 +27,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onTriggerPhantomBrake,
   onToggleIncident,
   hasActiveIncident,
+  onSpawnSpeeder,
 }) => {
   const speedOptions = [0.5, 1, 2, 5];
 
@@ -63,15 +65,17 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           >
             {isRunning ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
             <span>{isRunning ? '暫停' : '播放'}</span>
+            <kbd className="text-[9px] px-1 py-0.2 bg-black/30 rounded font-mono font-normal">Space</kbd>
           </button>
 
           <button
             onClick={onReset}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-all border border-slate-800 cursor-pointer"
-            title="重設車流"
+            title="重設車流 (快捷鍵 R)"
           >
             <RotateCcw className="w-4 h-4" />
           </button>
+
 
           <div className="flex items-center bg-slate-950 rounded-lg p-0.5 border border-slate-800 text-[11px] font-mono">
             {speedOptions.map((s) => (
@@ -224,14 +228,27 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       </div>
 
       {/* Action Triggers & Mitigations */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2 border-t border-slate-800/80">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 pt-2 border-t border-slate-800/80">
+        <button
+          onClick={onSpawnSpeeder}
+          className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold bg-rose-950/70 hover:bg-rose-900/90 text-rose-200 border border-rose-700/80 transition-all shadow-sm shadow-rose-950/50 cursor-pointer active:scale-95 group"
+          title="投放一輛 150 km/h 極端狂飆、零禮貌度、頻繁穿梭超車的車輛，觀察其對全線車流衝擊波的破壞效應！(快捷鍵 S)"
+        >
+          <span className="text-sm group-hover:scale-110 transition-transform">🏎️</span>
+          <span>投放狂飆車</span>
+          <kbd className="text-[9px] px-1 py-0.2 bg-rose-900/80 border border-rose-600/70 rounded font-mono text-rose-200">S</kbd>
+        </button>
+
         <button
           onClick={onTriggerPhantomBrake}
           className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold bg-purple-950/60 hover:bg-purple-900/80 text-purple-300 border border-purple-800/60 transition-all shadow-sm cursor-pointer active:scale-95"
+          title="手動觸發車流前車急煞波 (快捷鍵 B)"
         >
           <Zap className="w-3.5 h-3.5 text-purple-400" />
           <span>觸發幽靈點煞</span>
+          <kbd className="text-[9px] px-1 py-0.2 bg-purple-900/60 border border-purple-700/60 rounded font-mono text-purple-200">B</kbd>
         </button>
+
 
         <button
           onClick={onToggleIncident}

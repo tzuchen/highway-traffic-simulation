@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { SimulationEngine, SimulationParams } from './sim/simulation';
-import { ScenarioType, CongestionDiagnosis, TrajectoryPoint, DetectorReading } from './sim/types';
+import { ScenarioType, CongestionDiagnosis, TrajectoryPoint, DetectorReading, VehicleTelemetry } from './sim/types';
 import { SCENARIOS } from './sim/scenarios';
 import { Header } from './components/Header';
 import { HighwayCanvas } from './components/HighwayCanvas';
 import { SpaceTimeCanvas } from './components/SpaceTimeCanvas';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { ControlPanel } from './components/ControlPanel';
+import { VehicleInspector } from './components/VehicleInspector';
+import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { Info, HelpCircle } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -22,6 +24,12 @@ export const App: React.FC = () => {
   const [detectors, setDetectors] = useState<DetectorReading[]>([]);
   const [hasActiveIncident, setHasActiveIncident] = useState<boolean>(false);
   const [showExplanation, setShowExplanation] = useState<boolean>(false);
+
+  // Interactive telemetry & tracking state
+  const [selectedVehicleId, setSelectedVehicleId] = useState<number | null>(null);
+  const [telemetry, setTelemetry] = useState<VehicleTelemetry | null>(null);
+  const [isFollowingVehicle, setIsFollowingVehicle] = useState<boolean>(false);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
 
   // Animation frame loop
   const requestRef = useRef<number | null>(null);
@@ -41,8 +49,8 @@ export const App: React.FC = () => {
 
       const dt = 0.1; // 10Hz fixed physics step
       let steps = 0;
-      // Cap at 3 steps per animation frame to prevent physics blocking rendering at high speed
-      while (accumulatorRef.current >= dt && steps < 3) {
+      // Cap at 5 steps per animation frame to prevent physics blocking rendering at high speed
+      while (accumulatorRef.current >= dt && steps < 5) {
         engineRef.current.step(dt);
         accumulatorRef.current -= dt;
         steps++;
@@ -50,6 +58,7 @@ export const App: React.FC = () => {
       if (accumulatorRef.current > dt * 2) {
         accumulatorRef.current = 0;
       }
+      engineRef.current.subFrameSec = isRunning ? Math.min(dt, Math.max(0, accumulatorRef.current)) : 0;
 
       // Throttle numeric metrics updates to 10Hz (every 100ms)
       if (now - lastUIUpdateRef.current >= 100) {
@@ -79,12 +88,27 @@ export const App: React.FC = () => {
     };
   }, [updateSim]);
 
+  // Sync inspected vehicle telemetry with simulation time updates
+  useEffect(() => {
+    if (selectedVehicleId !== null) {
+      const telem = engineRef.current.getVehicleTelemetry(selectedVehicleId);
+      if (telem) {
+        setTelemetry(telem);
+      }
+    } else {
+      setTelemetry(null);
+      setIsFollowingVehicle(false);
+    }
+  }, [selectedVehicleId, simTime]);
+
   // Handlers
   const handleSelectScenario = (type: ScenarioType) => {
     setScenarioType(type);
     engineRef.current.setScenario(type);
     setParams({ ...engineRef.current.params });
     setSimTime(0);
+    setSelectedVehicleId(null);
+    setIsFollowingVehicle(false);
   };
 
   const handleTogglePlay = () => {
@@ -99,6 +123,8 @@ export const App: React.FC = () => {
     setTrajectories([]);
     setDetectors(engineRef.current.getDetectorReadings());
     setHasActiveIncident(false);
+    setSelectedVehicleId(null);
+    setIsFollowingVehicle(false);
   };
 
   const handleChangeParams = (newParams: Partial<SimulationParams>) => {
@@ -115,6 +141,55 @@ export const App: React.FC = () => {
     setHasActiveIncident(engineRef.current.hasActiveIncident());
   };
 
+  const handleInduceBrake = (id: number) => {
+    engineRef.current.induceVehicleBrake(id);
+  };
+
+  const handleSpawnSpeeder = () => {
+    const speeder = engineRef.current.spawnSpeeder();
+    setSelectedVehicleId(speeder.id);
+    setIsFollowingVehicle(true);
+    if (!isRunning) {
+      setIsRunning(true);
+    }
+  };
+
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(target?.tagName)) return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        setIsRunning((prev) => !prev);
+      } else if (e.key === 'r' || e.key === 'R') {
+        handleReset();
+      } else if (e.key === 's' || e.key === 'S') {
+        handleSpawnSpeeder();
+      } else if (e.key === '1') {
+        handleSelectScenario('lane_drop');
+      } else if (e.key === '2') {
+        handleSelectScenario('on_ramp');
+      } else if (e.key === '3') {
+        handleSelectScenario('phantom_jam');
+      } else if (e.key === '4') {
+        handleSelectScenario('accident');
+      } else if (e.key === 'b' || e.key === 'B') {
+        handleTriggerPhantomBrake();
+      } else if (e.key === 'Escape') {
+        setSelectedVehicleId(null);
+        setIsFollowingVehicle(false);
+        setIsShortcutsOpen(false);
+      } else if (e.key === '?') {
+        setIsShortcutsOpen((prev) => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const currentScenarioInfo = SCENARIOS[scenarioType];
 
   return (
@@ -125,6 +200,7 @@ export const App: React.FC = () => {
         onSelectScenario={handleSelectScenario}
         simTime={simTime}
         vehicleCount={vehicleCount}
+        onOpenShortcuts={() => setIsShortcutsOpen(true)}
       />
 
       {/* 2. Main Content Area */}
@@ -139,7 +215,7 @@ export const App: React.FC = () => {
 
           <button
             onClick={() => setShowExplanation(!showExplanation)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition-all font-medium"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition-all font-medium cursor-pointer"
           >
             <HelpCircle className="w-3.5 h-3.5 text-blue-400" />
             <span>{showExplanation ? '收起相變機制' : '查看相變與消散理論'}</span>
@@ -165,22 +241,36 @@ export const App: React.FC = () => {
         )}
 
         {/* Vertically Stacked Canvas Views (Extended Highway Length) */}
-        <div className="flex flex-col gap-5">
-          {/* 2D Highway Corridor Top-down View (Full Width) */}
+        <div className="flex flex-col gap-4">
+          {/* 2D Dual-View Highway: Full Overview Minimap with Loupe + 1:1 Isotropic Microscopic Detail */}
           <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between text-xs font-semibold text-slate-400 px-1">
-              <span className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                <span>【視圖 1】2D 高速公路全幅俯視動態 (微觀長路段車流 / 橫向長車身 / 煞車尾燈)</span>
-              </span>
-              <span className="text-[11px] text-slate-500 font-normal">綠: 暢通 / 黃: 微緩 / 橘紅: 壅塞 | 支援畫布滑鼠拖曳與滾輪縮放</span>
-            </div>
             <HighwayCanvas
+              engine={engineRef.current}
               road={engineRef.current.road}
               vehicles={engineRef.current.vehicles}
               scenarioType={scenarioType}
+              selectedVehicleId={selectedVehicleId}
+              onSelectVehicle={setSelectedVehicleId}
+              isFollowing={isFollowingVehicle}
+              onToggleFollow={() => setIsFollowingVehicle(!isFollowingVehicle)}
+              simTime={simTime}
+              diagnosis={diagnosis}
             />
           </div>
+
+          {/* Interactive Vehicle Telemetry Inspector HUD */}
+          {selectedVehicleId !== null && (
+            <VehicleInspector
+              telemetry={telemetry}
+              isFollowing={isFollowingVehicle}
+              onToggleFollow={() => setIsFollowingVehicle(!isFollowingVehicle)}
+              onInduceBrake={handleInduceBrake}
+              onClose={() => {
+                setSelectedVehicleId(null);
+                setIsFollowingVehicle(false);
+              }}
+            />
+          )}
 
           {/* Space-Time Trajectory Diagram View (Full Width) */}
           <div className="flex flex-col gap-2">
@@ -189,13 +279,14 @@ export const App: React.FC = () => {
                 <span className="w-2 h-2 rounded-full bg-purple-500" />
                 <span>【視圖 2】全線時空軌跡圖 (Space-Time Trajectory Diagram)</span>
               </span>
-              <span className="text-[11px] text-slate-500 font-normal">X 軸為模擬時間 (t)，Y 軸為道路里程 (x)，逆行密集條帶斜率代表衝擊波逆流速度</span>
+              <span className="text-[11px] text-slate-500 font-normal">X 軸為模擬時間 (t)，Y 軸為道路里程 (x)，紅粉虛線為理論逆行衝擊波斜率</span>
             </div>
             <SpaceTimeCanvas
               trajectories={trajectories}
               currentTime={simTime}
               roadLength={engineRef.current.road.length}
               bottleneckX={engineRef.current.road.lanes.find((l) => l.dropStart)?.dropStart}
+              selectedVehicleId={selectedVehicleId}
             />
           </div>
         </div>
@@ -220,10 +311,14 @@ export const App: React.FC = () => {
               onTriggerPhantomBrake={handleTriggerPhantomBrake}
               onToggleIncident={handleToggleIncident}
               hasActiveIncident={hasActiveIncident}
+              onSpawnSpeeder={handleSpawnSpeeder}
             />
           </div>
         </div>
       </main>
+
+      {/* Keyboard Shortcuts Modal */}
+      <KeyboardShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
     </div>
   );
 };

@@ -37,15 +37,31 @@ export function evaluateLaneChange(
 
   // 2. Discretionary Lane Changes (Left or Right)
   const candidateLanes: number[] = [];
-  if (curLane > 0) candidateLanes.push(curLane - 1); // Pass / Left lane
+  if (curLane > 0) {
+    // Highway regulation: Trucks are prohibited from discretionary lane changes into innermost passing lane 0
+    const isRestrictedTruck = ego.type === 'truck' && curLane - 1 === 0 && road.lanes.length >= 3;
+    if (!isRestrictedTruck) {
+      candidateLanes.push(curLane - 1); // Pass / Left lane
+    }
+  }
   if (curLane < road.lanes.length - 1) candidateLanes.push(curLane + 1); // Right lane
 
   let bestTarget: number | null = null;
   let bestIncentive = 0;
 
+  // Dynamic impatience & squeeze threshold:
+  // When ego is stuck in a slower lane (v << desiredSpeed), drivers become increasingly impatient,
+  // lowering their threshold to take advantage of openings in moving lanes.
+  const isSpeeder = ego.type === 'speeder' || ego.personality === 'speeder';
+  const speedRatio = Math.max(0, Math.min(1.0, ego.v / Math.max(1.0, ego.profile.desiredSpeed)));
+  const impatience = isSpeeder ? 1.0 : Math.max(0, 1.0 - speedRatio); // Speeders have constant max impatience
+  const effectiveThreshold = isSpeeder
+    ? 0.03 // Chronic overtaker: instant lane change at slightest speed benefit
+    : ego.profile.laneChangeThreshold * (1.0 - 0.5 * impatience);
+
   for (const targetLane of candidateLanes) {
-    const incentive = evaluateTargetLane(ego, targetLane, road, vehiclesByLane);
-    if (incentive > ego.profile.laneChangeThreshold && incentive > bestIncentive) {
+    const incentive = evaluateTargetLane(ego, targetLane, road, vehiclesByLane, impatience);
+    if (incentive > effectiveThreshold && incentive > bestIncentive) {
       bestIncentive = incentive;
       bestTarget = targetLane;
     }
@@ -59,13 +75,44 @@ export function evaluateLaneChange(
 }
 
 /**
+ * Computes average downstream lane speed within a lookahead horizon (e.g. 75m).
+ * Real human drivers look downstream; if vehicles ahead are braking or crawling,
+ * they anticipate the slowdown and seek to squeeze into faster adjacent lanes.
+ */
+function getDownstreamLaneSpeed(
+  egoX: number,
+  vehiclesOnLane: Vehicle[],
+  defaultSpeed: number,
+  lookaheadDist: number = 75
+): number {
+  let count = 0;
+  let totalSpeed = 0;
+
+  for (const v of vehiclesOnLane) {
+    const dist = v.x - egoX;
+    if (dist > 0 && dist <= lookaheadDist) {
+      totalSpeed += v.v;
+      count++;
+    }
+  }
+
+  if (count === 0) {
+    return defaultSpeed;
+  }
+
+  return totalSpeed / count;
+}
+
+/**
  * Calculates MOBIL incentive score for changing into targetLane.
+ * Enhanced with Downstream Lane Speed Gradient & Congestion Squeezing.
  */
 function evaluateTargetLane(
   ego: Vehicle,
   targetLane: number,
   road: RoadConfig,
-  vehiclesByLane: Vehicle[][]
+  vehiclesByLane: Vehicle[][],
+  impatience: number = 0
 ): number {
   const targetLaneConfig = road.lanes[targetLane];
   if (!targetLaneConfig || !targetLaneConfig.isOpen) return -Infinity;
@@ -78,21 +125,42 @@ function evaluateTargetLane(
   const curVehicles = vehiclesByLane[ego.currentLane] || [];
   const tgtVehicles = vehiclesByLane[targetLane] || [];
 
-  // Find neighbors
+  // Find immediate neighbors
   const { leader: curLeader, follower: curFollower } = findNeighbors(ego.x, curVehicles, ego.id);
   const { leader: tgtLeader, follower: tgtFollower } = findNeighbors(ego.x, tgtVehicles, ego.id);
 
-  // Physical gap safety
+  // 1. Downstream Lookahead Lane Speed Sensing (車道速度預判)
+  // Lookahead 75m down both lanes to detect downstream slowdowns before being completely stopped
+  const curDownstreamSpeed = getDownstreamLaneSpeed(ego.x, curVehicles, ego.v, 75);
+  const tgtDownstreamSpeed = getDownstreamLaneSpeed(ego.x, tgtVehicles, ego.profile.desiredSpeed, 75);
+  const laneSpeedAdvantage = tgtDownstreamSpeed - curDownstreamSpeed; // positive if target lane flows faster
+
+  // 2. Physical gap safety (with adaptive crowding / squeeze relaxation)
+  // When one lane slows down (or speeder weaves), drivers accept tighter gaps to squeeze into the moving lane
+  const isSpeeder = ego.type === 'speeder' || ego.personality === 'speeder';
+  const leadFloor = isSpeeder ? 0.9 : 1.1;
+  const lagFloor = isSpeeder ? 0.9 : 1.1;
+  const minLeadGap = Math.min(ego.profile.minGap, leadFloor + Math.max(0, ego.v - (tgtLeader?.v ?? ego.v)) * 0.3);
   if (tgtLeader) {
     const gapLead = tgtLeader.x - tgtLeader.profile.length - ego.x;
-    if (gapLead < ego.profile.minGap) return -Infinity;
+    if (gapLead < minLeadGap) return -Infinity;
   }
   if (tgtFollower) {
     const gapLag = ego.x - ego.profile.length - tgtFollower.x;
-    if (gapLag < tgtFollower.profile.minGap) return -Infinity;
+    const minLagGap = Math.min(tgtFollower.profile.minGap, lagFloor + Math.max(0, tgtFollower.v - ego.v) * 0.3);
+    if (gapLag < minLagGap) return -Infinity;
   }
 
-  // Current accelerations
+  // 3. Driver Impatience & Follower Decel Tolerance
+  // Squeezing into a moving lane: politeness decreases, and target follower braking tolerance relaxes
+  const effectivePoliteness = isSpeeder ? 0.01 : ego.profile.politeness * (1.0 - 0.7 * impatience);
+  const followerDecelLimit = isSpeeder
+    ? (tgtFollower ? -tgtFollower.profile.safeDecel * 1.5 : -4.5)
+    : (impatience > 0.3
+      ? (tgtFollower ? -tgtFollower.profile.safeDecel * (1.2 + 0.3 * impatience) : -3.5)
+      : (tgtFollower ? -tgtFollower.profile.safeDecel : -2.5));
+
+  // 4. Current accelerations
   const aCurEgo = calculateIDMAcceleration(ego, curLeader);
   const aCurOldFollower = curFollower ? calculateIDMAcceleration(curFollower, ego) : 0;
   const aCurNewFollower = tgtFollower ? calculateIDMAcceleration(tgtFollower, tgtLeader) : 0;
@@ -107,22 +175,31 @@ function evaluateTargetLane(
     : 0;
 
   // Safety Criterion: new follower must not brake too hard
-  if (tgtFollower && aProspectiveNewFollower < -tgtFollower.profile.safeDecel) {
+  if (tgtFollower && aProspectiveNewFollower < followerDecelLimit) {
     return -Infinity;
   }
   // Ego also must not be forced to emergency brake in target lane
-  if (aProspectiveEgo < -ego.profile.safeDecel) {
+  const egoDecelLimit = impatience > 0.3 ? -ego.profile.safeDecel * 1.5 : -ego.profile.safeDecel;
+  if (aProspectiveEgo < egoDecelLimit) {
     return -Infinity;
   }
 
-  // MOBIL Incentive Score
-  // G = (a'_e - a_e) + p * [ (a'_n - a_n) + (a'_o - a_o) ]
+  // 5. MOBIL Incentive Score with Speed-Gradient Squeeze Bonus
+  // G = (a'_e - a_e) + p_eff * [ (a'_n - a_n) + (a'_o - a_o) ]
   const egoAdvantage = aProspectiveEgo - aCurEgo;
   const otherAdvantage =
     (aProspectiveNewFollower - aCurNewFollower) +
     (aProspectiveOldFollower - aCurOldFollower);
 
-  let incentive = egoAdvantage + ego.profile.politeness * otherAdvantage;
+  let incentive = egoAdvantage + effectivePoliteness * otherAdvantage;
+
+  // Squeeze incentive ("往隔壁車道擠"):
+  // If target lane is noticeably faster (+5 ~ +40 km/h), apply a proportional incentive bonus
+  // so drivers proactively peel off from the congested/slow lane into the flowing lane
+  if (laneSpeedAdvantage > 1.5) {
+    const speedBonus = Math.min(1.2, (laneSpeedAdvantage / 8.0) * (0.35 + 0.65 * impatience));
+    incentive += speedBonus;
+  }
 
   // Optional Keep-Right Bias (+0.05 incentive to move to higher lane index)
   if (targetLane > ego.currentLane) {
@@ -151,17 +228,25 @@ function isValidMergeTarget(
   if (tgtLeader) {
     const gapLead = tgtLeader.x - tgtLeader.profile.length - ego.x;
     if (gapLead < (isUrgent ? 1.0 : ego.profile.minGap)) return false;
-  }
-  if (tgtFollower) {
-    const gapLag = ego.x - ego.profile.length - tgtFollower.x;
-    if (gapLag < (isUrgent ? 1.0 : tgtFollower.profile.minGap)) return false;
 
-    // Follower must not be forced past physical limit
-    const aNewFollower = calculateIDMAcceleration(tgtFollower, ego);
-    if (aNewFollower < (isUrgent ? SIM_CONSTANTS.MAX_BRAKING * 0.9 : -tgtFollower.profile.safeDecel * 1.5)) {
+    // Ego must not be forced to crash or brake beyond physical emergency threshold
+    const aNewEgo = calculateIDMAcceleration(ego, tgtLeader);
+    if (aNewEgo < (isUrgent ? -ego.profile.safeDecel * 2.0 : -ego.profile.safeDecel)) {
       return false;
     }
   }
+  if (tgtFollower) {
+    const gapLag = ego.x - ego.profile.length - tgtFollower.x;
+    const dynamicMinLag = Math.max(1.5, (tgtFollower.v - ego.v) * 0.6);
+    if (gapLag < (isUrgent ? dynamicMinLag : tgtFollower.profile.minGap)) return false;
+
+    // Follower must not be forced past physical braking limit
+    const aNewFollower = calculateIDMAcceleration(tgtFollower, ego);
+    if (aNewFollower < (isUrgent ? -tgtFollower.profile.safeDecel * 1.5 : -tgtFollower.profile.safeDecel)) {
+      return false;
+    }
+  }
+
 
   return true;
 }
